@@ -12,7 +12,7 @@ from model import TinyVGG  # 导入分离的 TinyVGG
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 优先使用 GPU
 CACHE_PATH = "data.npy"  # 缓存文件路径
 SAVE_PATH = "best.pt"    # 模型保存路径
-EPOCHS = 200             # 训练轮数
+EPOCHS = 100             # 训练轮数
 BATCH_SIZE = 2048        # 批次大小
 VAL_RATIO = 0.1          # 验证集比例
 EPS = 1e-8               # 避免除零

@@ -68,4 +68,4 @@ def preload_parallel(root: str) -> tuple[np.ndarray, np.ndarray]:
     return X, Y
 
 if __name__ == "__main__":
-    preload_parallel("val_256")
+    preload_parallel("test_256")
