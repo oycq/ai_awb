@@ -2,3 +2,4 @@ val_256
 best.pt
 output
 data.npy
+__pycache__

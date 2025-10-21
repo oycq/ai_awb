@@ -13,8 +13,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # 优先�
 CACHE_PATH = "data.npy"  # 缓存文件路径
 SAVE_PATH = "best.pt"    # 模型保存路径
 EPOCHS = 200             # 训练轮数
-BATCH_SIZE = 4096        # 批次大小
-LR = 1e-4                # 学习率
+BATCH_SIZE = 2048        # 批次大小
 VAL_RATIO = 0.1          # 验证集比例
 EPS = 1e-8               # 避免除零
 WEIGHT_DECAY = 1e-5      # L2 正则化
@@ -68,8 +67,7 @@ def train_model():
     val_loader = DataLoader(val_ds, BATCH_SIZE, shuffle=False, pin_memory=True)
 
     model = TinyVGG().to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=10)
+    optimizer = torch.optim.Adam(model.parameters(), weight_decay=WEIGHT_DECAY)
 
     best_val_loss = float("inf")
     for epoch in range(1, EPOCHS + 1):
@@ -93,8 +91,7 @@ def train_model():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save({"model": model.state_dict(), "epoch": epoch, "val_loss": val_loss}, SAVE_PATH)
-        
-        scheduler.step(val_loss)  # 更新学习率
+
 
 if __name__ == "__main__":
     train_model()

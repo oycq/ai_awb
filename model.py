@@ -18,17 +18,16 @@ class TinyVGG(nn.Module):
         )
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.head = nn.Sequential(
-            nn.Linear(64, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 32),
-            nn.ReLU(inplace=True),
-            nn.Linear(32, 2)  # [G/R, G/B]
+            nn.Linear(64, 2)
+            # nn.Linear(64, 2), nn.BatchNorm1d(32), nn.ReLU(inplace=True),
+            # nn.Linear(32, 32), nn.BatchNorm1d(32), nn.ReLU(inplace=True),
+            # nn.Linear(32, 2)  # [G/R, G/B]
         )
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
-            elif isinstance(m, nn.BatchNorm2d):
+            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
