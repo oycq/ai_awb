@@ -71,27 +71,14 @@ def make_net_input_from_rgb(rgb_u8: np.ndarray, size: int = 32) -> torch.Tensor:
     chw = (wb32.astype(np.float32) / 255.0).transpose(2, 0, 1)  # [3,H,W]
     return torch.from_numpy(chw).unsqueeze(0)  # [1,3,H,W]
 
-def main():
-    ap = argparse.ArgumentParser(description="Raw(16-bit, RGGB) -> demosaic -> grayworld(G-anchor) -> net -> ratio correction -> sRGB")
-    ap.add_argument("--raw",  type=str, default="raw.png", help="single-channel 16-bit Bayer (RGGB) PNG")
-    ap.add_argument("--ckpt", type=str, default="best.pt", help="trained checkpoint (TinyVGG)")
-    ap.add_argument("--black", type=float, default=9.125, help="black level subtract after /256")
-    ap.add_argument("--out",  type=str, default="output.png", help="output sRGB PNG")
-    args = ap.parse_args()
-
-    raw_path = Path(args.raw); ckpt_path = Path(args.ckpt)
-    assert raw_path.exists(), f"找不到输入：{raw_path}"
-    assert ckpt_path.exists(), f"找不到模型：{ckpt_path}"
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.backends.cudnn.benchmark = True
-
+# === BATCH ADD === 把单张处理封装为函数（不改你原有逻辑，仅搬到函数里便于复用）
+def process_one(raw_path: Path, out_path: Path, model: TinyVGG, device: torch.device, black_level: float):
     # 1) RAW16 → /256 → 减黑电平 → clip
     raw16 = cv2.imread(str(raw_path), cv2.IMREAD_UNCHANGED)  # uint16, shape [H,W]
     if raw16 is None or raw16.ndim != 2:
-        raise ValueError("期望单通道 16-bit Bayer PNG（RGGB），如 raw.png。")
+        raise ValueError(f"期望单通道 16-bit Bayer PNG（RGGB），如 raw.png。错误文件：{raw_path}")
     raw_f = raw16.astype(np.float32) / 256.0
-    raw_f = np.maximum(raw_f - float(args.black), 0.0)
+    raw_f = np.maximum(raw_f - float(black_level), 0.0)
     raw_f = np.clip(raw_f, 0.0, 255.0)
 
     # 2) 去马赛克（RGGB），得到线性域 BGR(0..255)
@@ -102,12 +89,7 @@ def main():
     # 3) 当前通道比值（未校正）
     gr_now, gb_now = compute_gr_gb(rgb_linear)
 
-    # 4) 载入模型，计算“应该的” [g/r_pred, g/b_pred]
-    model = TinyVGG().to(device)
-    state = torch.load(str(ckpt_path), map_location="cpu")
-    model.load_state_dict(state["model"] if isinstance(state, dict) and "model" in state else state)
-    model.eval()
-
+    # 4) 计算“应该的” [g/r_pred, g/b_pred]
     x = make_net_input_from_rgb(rgb_linear, size=32).to(device)
     with torch.no_grad():
         out = model(x).squeeze(0).cpu().numpy()
@@ -115,10 +97,6 @@ def main():
         gb_pred = float(out[1])  # 目标 g/b
 
     # 5) 把原始线性图的通道比值“恢复”为网络输出值
-    #    目标：G/R -> gr_pred，G/B -> gb_pred
-    #    调整尺度：R' = R * R_scale，B' = B * B_scale
-    #    由于 G/R' = (G/R) / R_scale，因此取 R_scale = gr_now / gr_pred
-    #          G/B' = (G/B) / B_scale，因此取 B_scale = gb_now / gb_pred
     R_scale = float(gr_now / (gr_pred + EPS))
     B_scale = float(gb_now / (gb_pred + EPS))
 
@@ -129,13 +107,57 @@ def main():
 
     # 6) 线性 → sRGB，写文件
     out_srgb = linear_to_srgb_uint8(bgr_corr)
-    cv2.imwrite(str(args.out), out_srgb)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), out_srgb)
 
     # 7) 简要打印
-    print(f"[IMAGE] {raw_path.name} -> {args.out}")
+    print(f"[IMAGE] {raw_path.name} -> {out_path.name}")
     print(f" now : g/r={gr_now:.6f}  g/b={gb_now:.6f}")
     print(f" pred: g/r={gr_pred:.6f}  g/b={gb_pred:.6f}")
     print(f" scales used: R_scale={R_scale:.6f}  B_scale={B_scale:.6f}")
+
+def main():
+    ap = argparse.ArgumentParser(description="Raw(16-bit, RGGB) -> demosaic -> grayworld(G-anchor) -> net -> ratio correction -> sRGB")
+    ap.add_argument("--raw",  type=str, default="2025-10-16_10-27-15_cam2_raw.png", help="single-channel 16-bit Bayer (RGGB) PNG")
+    ap.add_argument("--ckpt", type=str, default="best.pt", help="trained checkpoint (TinyVGG)")
+    ap.add_argument("--black", type=float, default=9.125, help="black level subtract after /256")
+    ap.add_argument("--out",  type=str, default="output.png", help="output sRGB PNG")
+    # === BATCH ADD === 批量目录参数
+    ap.add_argument("--in_dir",  type=str, default="input", help="directory containing raw PNGs")
+    ap.add_argument("--out_dir", type=str, default="output", help="directory to save AWB sRGB PNGs")
+    args = ap.parse_args()
+
+    # 原单图模式的断言保留；批量模式将优先于单图模式执行
+    raw_path = Path(args.raw); ckpt_path = Path(args.ckpt)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.backends.cudnn.benchmark = True
+
+    # 载入模型（一次即可复用）
+    model = TinyVGG().to(device)
+    state = torch.load(str(ckpt_path), map_location="cpu")
+    model.load_state_dict(state["model"] if isinstance(state, dict) and "model" in state else state)
+    model.eval()
+
+    in_dir  = Path(args.in_dir)
+    out_dir = Path(args.out_dir)
+
+    # === BATCH ADD === 如果 in_dir 存在，则批量处理该目录下所有 .png；否则走原单图逻辑
+    if in_dir.exists() and in_dir.is_dir():
+        pngs = sorted(in_dir.glob("*.png"))
+        if not pngs:
+            print(f"[WARN] {in_dir} 下没有找到 *.png，退回单图模式。")
+        else:
+            print(f"[BATCH] 发现 {len(pngs)} 个 PNG，输出到：{out_dir}")
+            for p in pngs:
+                out_path = out_dir / p.name
+                process_one(p, out_path, model, device, args.black)
+            return
+
+    # ---- 单图模式（保持你原本的行为） ----
+    assert raw_path.exists(), f"找不到输入：{raw_path}"
+    x_out = Path(args.out)
+    process_one(raw_path, x_out, model, device, args.black)
 
 if __name__ == "__main__":
     main()

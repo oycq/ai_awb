@@ -27,6 +27,17 @@ SAVE_PATH = "best.pt"
 CACHE_FN  = "data.npy"
 EPS = 1e-8
 
+# === MINIMAL-ADD === sRGB(0..1)->线性RGB(0..1)，不改变0-1/0-255的整体约定
+def srgb01_to_linear01(x: np.ndarray) -> np.ndarray:
+    """
+    输入/输出：float32，范围0..1
+    按 IEC 61966-2-1 把 sRGB 转线性
+    """
+    x = x.astype(np.float32)
+    mask = (x <= 0.04045).astype(np.float32)
+    lin  = x / 12.92 * mask + (((x + 0.055) / 1.055) ** 2.4) * (1.0 - mask)
+    return lin
+
 # ========= 灰世界（以 G 为锚） & 真值 =========
 def gray_world_wb_uint8(rgb_u8: np.ndarray) -> np.ndarray:
     """
@@ -80,11 +91,17 @@ class TinyVGG(nn.Module):
 # ========= 并行预加载 =========
 def _load_one(i, p, in_size: int):
     im  = Image.open(p).convert("RGB")
-    rgb = np.array(im)
-    gr, gb = compute_gt_ratios_from_original(rgb)                    # 现在的真值: [g/r, g/b]
-    wb  = gray_world_wb_uint8(rgb)                                   # G 锚灰世界
+    rgb = np.array(im)                                         # uint8 sRGB
+    gr, gb = compute_gt_ratios_from_original(rgb)              # 现在的真值: [g/r, g/b]（保持原来定义：基于 sRGB 均值）
+
+    wb  = gray_world_wb_uint8(rgb)                             # G 锚灰世界（保持原实现）
     wb  = Image.fromarray(wb, "RGB").resize((in_size, in_size), Image.BILINEAR)
-    arr = (np.asarray(wb, dtype=np.float32) / 255.0).transpose(2,0,1)  # [3,H,W]
+
+    # === MINIMAL-ADD === 只在喂网络前把 sRGB(0..1) 变成 线性(0..1)，其余不动
+    wb_f01  = np.asarray(wb, dtype=np.float32) / 255.0         # 仍然保持 0..1 的输入约定
+    wb_lin  = srgb01_to_linear01(wb_f01)                       # sRGB -> Linear（0..1）
+    arr     = wb_lin.transpose(2,0,1).astype(np.float32)       # [3,H,W]
+
     return i, arr, np.array([gr, gb], dtype=np.float32)
 
 def preload_mem_parallel(root: str, in_size=IN_SIZE, workers=8):
@@ -234,12 +251,12 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_root", type=str, default="val_256")
-    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--batch_size", type=int, default=4096)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val_ratio", type=float, default=0.1)
     ap.add_argument("--test_ratio", type=float, default=0.0)   # 需要 test 时改 >0
-    ap.add_argument("--preload_workers", type=int, default=8)
+    ap.add_argument("--preload_workers", type=int, default=16)
     ap.add_argument("--rebuild_cache", action="store_true")
     args = ap.parse_args()
 
