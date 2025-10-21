@@ -22,17 +22,21 @@ def srgb_to_linear(x: np.ndarray) -> np.ndarray:
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
 
 def gray_world_wb(rgb_linear: np.ndarray) -> np.ndarray:
-    """在线性 RGB [0,1] 域应用灰世界白平衡, G 通道为锚"""
+    """在线性 RGB [0,1] 域应用灰世界白平衡, G 通道为锚，并规范化均值之和为 1"""
     means = rgb_linear.reshape(-1, 3).mean(axis=0) + EPS  # [R均值, G均值, B均值]
     gains = np.array([means[1] / means[0], 1.0, means[1] / means[2]], dtype=np.float32)
-    return np.clip(rgb_linear * gains[None, None, :], 0, 1)
+    wb = np.clip(rgb_linear * gains[None, None, :], 0, 1)
+    # 规范化均值之和为 1
+    wb_means = wb.reshape(-1, 3).mean(axis=0) + EPS
+    k = 1.0 / (wb_means.sum() + EPS)  # 缩放系数
+    wb = wb * k
+    return wb
 
 def compute_gt_ratios(rgb_linear: np.ndarray) -> tuple[float, float]:
     """在线性 RGB 均值基础上计算 G/R 和 G/B 真值比率, 限制最大值"""
     means = rgb_linear.reshape(-1, 3).mean(axis=0) + EPS
     gr = min(float(means[1] / means[0]), MAX_RATIO)  # 裁剪到 MAX_RATIO
     gb = min(float(means[1] / means[2]), MAX_RATIO)
-    #print(f"G/R={gr:.4f}, G/B={gb:.4f}")  # 调试比率
     return gr, gb
 
 def process_image(p: str) -> tuple[np.ndarray, np.ndarray]:

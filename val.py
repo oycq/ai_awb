@@ -35,10 +35,15 @@ def linear_to_srgb_uint8(bgr_linear_float_0_255: np.ndarray) -> np.ndarray:
 
 # 灰世界白平衡（以 G 为锚，与 data_prep.py 一致）
 def gray_world_G_anchor_rgb(rgb_linear: np.ndarray) -> np.ndarray:
-    """在线性 RGB [0,1] 域应用灰世界白平衡, G 通道为锚"""
+    """在线性 RGB [0,1] 域应用灰世界白平衡, G 通道为锚，并规范化均值之和为 1"""
     means = rgb_linear.reshape(-1, 3).mean(axis=0) + EPS  # [R均值, G均值, B均值]
     gains = np.array([means[1] / means[0], 1.0, means[1] / means[2]], dtype=np.float32)
-    return np.clip(rgb_linear * gains[None, None, :], 0, 1)
+    wb = np.clip(rgb_linear * gains[None, None, :], 0, 1)
+    # 规范化均值之和为 1
+    wb_means = wb.reshape(-1, 3).mean(axis=0) + EPS
+    k = 1.0 / (wb_means.sum() + EPS)  # 缩放系数
+    wb = wb * k
+    return wb
 
 # 计算 G/R 和 G/B 比率（线性 RGB 域，裁剪到 MAX_RATIO）
 def compute_gr_gb(rgb_linear: np.ndarray) -> tuple[float, float]:
